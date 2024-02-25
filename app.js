@@ -1,4 +1,3 @@
-// Import required modules
 const express = require('express');
 const bcrypt = require('bcrypt')
 const bodyParser = require('body-parser');
@@ -8,8 +7,23 @@ const mongoose = require('./db');
 const User = require('./models/User');
 const Artwork = require('./models/Artwork');
 const uuid = require('uuid')
-var dotenv = require("dotenv")
+const dotenv = require("dotenv")
+const multer = require('multer');
+const fs = require('fs');
+const upload = multer({ dest: 'uploads/' });
+const axios = require('axios');
+const moment = require('moment');
+
 dotenv.config()
+
+const Minio = require("minio");
+const minioClient = new Minio.Client({
+  accessKey: process.env.ACCESS_KEY,
+  port: 9000,
+  useSSL: false,
+  secretKey: process.env.SECRET_KEY,
+  endPoint: "localhost",
+});
 
 class Session {
   constructor(username, expiresAt) {
@@ -180,7 +194,7 @@ app.post('/register', async (req, res) => {
 
   
 
-app.post('/artworks', async (req, res) => {
+app.post('/artworks',  upload.fields([{ name: 'file1' }, { name: 'file2' }, { name: 'file3' }]), async (req, res) => {
   try {
     if (!isAuthenticated(req, res)) {
       res.status(401).end();
@@ -200,7 +214,8 @@ app.post('/artworks', async (req, res) => {
     return res.status(403).json({ error: 'Forbidden action' });
   }
 
-    const { name, description } = req.body;
+    const name  = req.query.name;
+    const description = req.query.description;
     if (!name) {
       console.log("Name is required");
       return res.status(400).json({ error: 'Name is required' });
@@ -209,6 +224,36 @@ app.post('/artworks', async (req, res) => {
     const artwork = new Artwork({ name, description, user: user._id });
     const savedArtwork = await artwork.save();
     sendNotification(user.email, user.firstName);
+    const files = req.files;
+
+  const bucketName = `${savedArtwork._id}`;
+  minioClient.makeBucket(bucketName, '', function(err) {
+      if (err) {
+          return console.log('Error creating bucket: ', err);
+      }
+
+      console.log('Bucket created successfully');
+      
+      Object.keys(files).forEach((key) => {
+          const photo = files[key][0];
+          const filePath = photo.path;
+          const fileName = `${key}.jpg`;
+
+          minioClient.fPutObject(bucketName, fileName, filePath, (err, etag) => {
+              if (err) {
+                  return console.log('Error uploading photo: ', err);
+              }
+
+              console.log('Photo uploaded successfully: ', etag);
+              fs.unlinkSync(filePath);
+          });
+      });
+    });
+
+
+    
+
+
     res.status(201).json(savedArtwork);
   } catch (error) {
     console.log(error)
@@ -218,54 +263,123 @@ app.post('/artworks', async (req, res) => {
 
 
 app.get('/artworks', async (req, res) => {
-  
   if (!req.cookies) {
-    res.status(401).end()
-    return
-}
+      res.status(401).end()
+      return
+  }
 
-const sessionToken = req.cookies['session_token']
-if (!sessionToken) {
-    res.status(401).end()
-    return
-}
+  const sessionToken = req.cookies['session_token']
+  if (!sessionToken) {
+      res.status(401).end()
+      return
+  }
 
-userSession = sessions[sessionToken]
-if (!userSession) {
-    res.status(401).end()
-    return
-}
-if (userSession.isExpired()) {
-    delete sessions[sessionToken]
-    res.status(401).end()
-    return
-}
+  userSession = sessions[sessionToken]
+  if (!userSession) {
+      res.status(401).end()
+      return
+  }
+  if (userSession.isExpired()) {
+      delete sessions[sessionToken]
+      res.status(401).end()
+      return
+  }
 
   try {
-    const artworks = await Artwork.find();
-    res.json(artworks);
+      const artworks = await Artwork.find();
+
+      await Promise.all(artworks.map(async (artwork) => {
+          try {
+              const bucketName = `${artwork._id}`;
+              const photosStream = minioClient.listObjects(bucketName);
+              const photos = [];
+
+              photosStream.on('data', (obj) => {
+                console.log("new photo")
+                  photos.push(obj);
+              });
+
+              photosStream.on('error', (err) => {
+                  console.error(`Error fetching photos for artwork ${artwork._id}: ${err}`);
+                  return []
+              });
+
+              photosStream.on('end', async () => {
+                console.log("end")
+                  artwork.downloadLinks = await Promise.all(photos.map(async (photo) => {
+                      try {
+                          const presignedUrl = await minioClient.presignedGetObject(bucketName, photo.name, 60*60*24);
+                          console.log(presignedUrl)
+                          return presignedUrl;
+                      } catch (error) {
+                          console.error(`Error generating presigned URL for photo ${photo.name}: ${error}`);
+                          return []; // or handle error differently
+                      }
+                  }));
+
+                  
+                  res.json(artworks);
+              });
+          } catch (error) {
+              console.error(`Error fetching photos for artwork ${artwork._id}: ${error}`);
+              artwork.downloadLinks = []; // Or set it to null or handle error differently
+          }
+      }));
   } catch (error) {
-    res.status(500).json({ error: 'Internal Server Error' });
+      res.status(500).json({ error: error });
   }
 });
 
-// Retrieve a single task by ID
+
 app.get('/artworks/:id', async (req, res) => {
-  try {
-    if (!isAuthenticated(req, res)) {
-      res.status(401).end();
-      return;
+
+  if (!isAuthenticated(req, res)) {
+    res.status(401).end();
+    return;
   }
 
+  try {
     const artwork = await Artwork.findById(req.params.id);
     if (!artwork) {
-      return res.status(404).json({ error: 'Task not found' });
+      return res.status(404).json({ error: 'Artwork not found' });
     }
+
+    const bucketName = `${artwork._id}`;
+    const photos = await new Promise((resolve, reject) => {
+      const photosStream = minioClient.listObjects(bucketName);
+      const photosList = [];
+
+      photosStream.on('data', (obj) => {
+        photosList.push(obj);
+      });
+
+      photosStream.on('error', (err) => {
+        console.error(`Error fetching photos for artwork ${artwork._id}: ${err}`);
+        resolve(photosList);
+      });
+
+      photosStream.on('end', () => {
+        resolve(photosList);
+      });
+    });
+
+    artwork.downloadLinks = await Promise.all(photos.map(async (photo) => {
+      try {
+        const presignedUrl = await minioClient.presignedGetObject(bucketName, photo.name, 60*60*24);
+        return presignedUrl;
+      } catch (error) {
+        console.error(`Error generating presigned URL for photo ${photo.name}: ${error}`);
+        return null; // or handle error differently
+      }
+    }));
+
     res.json(artwork);
   } catch (error) {
+    console.error(`Error fetching artwork ${req.params.id}: ${error}`);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
+
 
 // Update a task by ID
 app.put('/artworks/:id', async (req, res) => {
@@ -317,6 +431,103 @@ app.put('/artworks/:id', async (req, res) => {
 
 // Delete a task by ID
 app.delete('/artworks/:id', async (req, res) => {
+  if (!isAuthenticated(req, res)) {
+    res.status(401).end();
+    return;
+  }
+
+  const sessionToken = req.cookies['session_token'];
+  const userSession = sessions[sessionToken];
+  const user = await User.findOne({ username: userSession.username });
+
+  if (!user) {
+    console.log("User not found");
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  if (user.role !== "admin") {
+    return res.status(403).json({ error: 'Forbidden action' });
+  }
+
+  try {
+    const artwork = await Artwork.findById(req.params.id);
+    if (!artwork) {
+      return res.status(404).json({ error: 'Artwork not found' });
+    }
+
+    const bucketName = `${artwork._id}`;
+    const objectsStream = minioClient.listObjects(bucketName);
+    const objectsToDelete = [];
+
+    objectsStream.on('data', (obj) => {
+      objectsToDelete.push(obj.name);
+    });
+
+    objectsStream.on('end', () => {
+      if (objectsToDelete.length > 0) {
+        minioClient.removeObjects(bucketName, objectsToDelete, (err) => {
+          if (err) {
+            console.error(`Error removing objects from bucket ${bucketName}: ${err}`);
+            return res.status(500).json({ error: 'Error removing objects from bucket' });
+          }
+          minioClient.removeBucket(bucketName, (err) => {
+            if (err) {
+              console.error(`Error removing bucket ${bucketName}: ${err}`);
+              return res.status(500).json({ error: 'Error removing bucket' });
+            }
+            console.log(`Bucket ${bucketName} and its objects deleted successfully`);
+
+            Artwork.findByIdAndDelete(req.params.id)
+              .then((deletedArtwork) => {
+                if (!deletedArtwork) {
+                  return res.status(404).json({ error: 'Artwork not found' });
+                }
+                res.status(204).send();
+              })
+              .catch((err) => {
+                console.error(`Error deleting artwork ${req.params.id}: ${err}`);
+                res.status(500).json({ error: 'Error deleting artwork' });
+              });
+          });
+        });
+      } else {
+        minioClient.removeBucket(bucketName, (err) => {
+          if (err) {
+            console.error(`Error removing bucket ${bucketName}: ${err}`);
+            return res.status(500).json({ error: 'Error removing bucket' });
+          }
+          console.log(`Bucket ${bucketName} deleted successfully`);
+
+          Artwork.findByIdAndDelete(req.params.id)
+            .then((deletedArtwork) => {
+              if (!deletedArtwork) {
+                return res.status(404).json({ error: 'Artwork not found' });
+              }
+              res.status(204).send();
+            })
+            .catch((err) => {
+              console.error(`Error deleting artwork ${req.params.id}: ${err}`);
+              res.status(500).json({ error: 'Error deleting artwork' });
+            });
+        });
+      }
+    });
+
+    objectsStream.on('error', (err) => {
+      console.error(`Error listing objects in bucket ${bucketName}: ${err}`);
+      return res.status(500).json({ error: 'Error listing objects in bucket' });
+    });
+  } catch (error) {
+    console.error(`Error fetching artwork ${req.params.id}: ${error}`);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+
+
+
+app.put('/artworks/updatePhotos/:artworkId', upload.fields([{ name: 'file1' }, { name: 'file2' }, { name: 'file3' }]), async (req, res) => {
+
 
   if (!isAuthenticated(req, res)) {
     res.status(401).end();
@@ -338,24 +549,69 @@ app.delete('/artworks/:id', async (req, res) => {
   }
 
 
-  try {
-    const artwork = await Artwork.findById(req.params.id);
-    if (!artwork) {
-      return res.status(404).json({ error: 'Artwork not found' });
-    }
+  const artworkId = req.params.artworkId;
+  const files = req.files;
 
-    const deletedTask = await Artwork.findByIdAndDelete(req.params.id);
-    if (!deletedTask) {
-      return res.status(404).json({ error: 'Task not found' });
-    }
-    res.status(204).send();
+  const bucketName = `${artworkId}`;
+
+  Object.keys(files).forEach((key) => {
+      const photo = files[key][0]; 
+      const filePath = photo.path;
+      const fileName = `${key}.jpg`; 
+      minioClient.fPutObject(bucketName, fileName, filePath, (err, etag) => {
+          if (err) {
+              return console.log('Error uploading photo: ', err);
+          }
+
+          console.log('Photo uploaded successfully: ', etag);
+          fs.unlinkSync(filePath);
+      });
+  });
+
+  res.status(201).send();
+});
+
+
+
+//example http://localhost:2912/getHospitalizedCounts?date=2020-04-08
+//not secured endpoint
+app.get('/getHospitalizedCounts', async (req, res) => {
+
+  if (!isAuthenticated(req, res)) {
+    res.status(401).end();
+    return;
+  }
+
+
+  try {
+      const { date } = req.query;
+      const startDate = moment(date, 'YYYYMMDD'); 
+      const hospitalizedCounts = [];
+
+      for (let i = 0; i < 7; i++) {
+          const currentDate = startDate.clone().subtract(i, 'days');
+          const formattedDate = currentDate.format('YYYYMMDD');
+          const apiUrl = `https://api.covidtracking.com/v1/us/${formattedDate}.json`;
+
+          const response = await axios.get(apiUrl);
+          const hospitalizedCount = response.data.hospitalized;
+
+          hospitalizedCounts.push({
+              date: formattedDate,
+              hospitalized: hospitalizedCount
+          });
+      }
+
+      res.json(hospitalizedCounts);
   } catch (error) {
-    res.status(500).json({ error: 'Internal Server Error' });
+      console.error('Error fetching hospitalized counts: ', error);
+      res.status(500).json({ error: 'Internal Server Error' });
   }
 });
+
+
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-

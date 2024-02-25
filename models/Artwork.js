@@ -5,7 +5,6 @@ const artworkSchema = new Schema({
   name: {
     type: String,
     required: true,
-    unique: true
   },
   description: {
     type: String,
@@ -15,6 +14,9 @@ const artworkSchema = new Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
+  },
+  downloadLinks:{
+    type: mongoose.Schema.Types.Array
   }
 }, { timestamps: true });
 
