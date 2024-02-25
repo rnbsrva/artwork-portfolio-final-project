@@ -611,6 +611,41 @@ app.get('/getHospitalizedCounts', async (req, res) => {
 
 
 
+
+app.get('/population', async (req, res) => {
+
+
+  if (!isAuthenticated(req, res)) {
+    res.status(401).end();
+    return;
+  }
+
+  try {
+      const { yearFrom, yearTo } = req.body;
+
+      const apiUrl = `https://datausa.io/api/data?drilldowns=Nation&measures=Population`;
+      const response = await axios.get(apiUrl);
+      const data = response.data.data;
+
+      const filteredData = data.filter(item => {
+          const year = parseInt(item.Year);
+          return year >= parseInt(yearFrom) && year <= parseInt(yearTo);
+      });
+
+      const result = filteredData.map(item => ({
+          Year: item.Year,
+          Population: item.Population
+      }));
+
+      res.json(result);
+  } catch (error) {
+      console.error('Error fetching data:', error);
+      res.status(500).json({ error: 'Failed to fetch data' });
+  }
+});
+
+
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
