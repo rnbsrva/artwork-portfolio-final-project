@@ -43,7 +43,7 @@ const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 app.use(cookieParser());
-
+app.use(cors())
   
 app.post('/register', async (req, res) => {
     console.log(req.body);
@@ -74,6 +74,7 @@ app.post('/register', async (req, res) => {
         sessions[sessionToken] = session
         res.cookie("session_token", sessionToken, { expires: expiresAt });
         res.json(newUser)
+        res.setHeader('x-session-token', sessionToken);
         res.end();
       } catch (error) {
         console.error(error);
@@ -103,6 +104,7 @@ app.post('/register', async (req, res) => {
       sessions[sessionToken] = session
       res.cookie("session_token", sessionToken, { expires: expiresAt })
       res.status(200).json({ message: 'Login successful', userId: user._id });
+      res.setHeader('x-session-token', sessionToken);
       res.end();
     } catch (error) { 
       res.status(500).json({ error: 'Internal Server Error' });
@@ -161,6 +163,7 @@ app.post('/register', async (req, res) => {
     delete sessions[sessionToken]
 
     res.cookie("session_token", newSessionToken, { expires: expiresAt })
+    res.setHeader('x-session-token', sessionToken);
     res.status(200);
     res.end()
   });
@@ -189,6 +192,7 @@ app.post('/register', async (req, res) => {
         return false;
     }
 
+    
     return true;
 };
 
