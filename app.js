@@ -13,6 +13,7 @@ const fs = require('fs');
 const upload = multer({ dest: 'uploads/' });
 const axios = require('axios');
 const moment = require('moment');
+var cors = require('cors');
 
 dotenv.config()
 
