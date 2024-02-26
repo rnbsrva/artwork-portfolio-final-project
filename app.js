@@ -74,7 +74,7 @@ app.post('/register', async (req, res) => {
         sessions[sessionToken] = session
         res.setHeader('x-session-token', sessionToken);
         res.setHeader('x-session-token-expiration', expiresAt);
-        res.json(newUser)
+        res.json({user:newUser,sessionToken })
         res.end();
       } catch (error) {
         console.error(error);
@@ -104,7 +104,7 @@ app.post('/register', async (req, res) => {
       sessions[sessionToken] = session
       res.setHeader('x-session-token', sessionToken);
       res.setHeader('x-session-token-expiration', expiresAt);
-      res.status(200).json({ message: 'Login successful', userId: user._id });
+      res.status(200).json({sessionToken});
       res.end();
     } catch (error) { 
       res.status(500).json({ error: 'Internal Server Error' });
@@ -279,6 +279,7 @@ app.get('/artworks', async (req, res) => {
           return;
       }
 
+      // Create an array to hold all promises for fetching download links
       const promises = artworks.map(async (artwork) => {
           try {
               const bucketName = `${artwork._id}`;
@@ -295,33 +296,38 @@ app.get('/artworks', async (req, res) => {
                   return [];
               });
 
-              photosStream.on('end', async () => {
-                  console.log("end");
-                  artwork.downloadLinks = await Promise.all(photos.map(async (photo) => {
-                      try {
-                          const presignedUrl = await minioClient.presignedGetObject(bucketName, photo.name, 60 * 60 * 24);
-                          console.log(presignedUrl);
-                          return presignedUrl;
-                      } catch (error) {
-                          console.error(`Error generating presigned URL for photo ${photo.name}: ${error}`);
-                          return []; // or handle error differently
-                      }
-                  }));
+              // Wait for all photos to be fetched
+              await new Promise((resolve, reject) => {
+                  photosStream.on('end', resolve);
               });
+
+              // Populate downloadLinks after all photos are fetched
+              artwork.downloadLinks = await Promise.all(photos.map(async (photo) => {
+                  try {
+                      const presignedUrl = await minioClient.presignedGetObject(bucketName, photo.name, 60 * 60 * 24);
+                      console.log(presignedUrl);
+                      return presignedUrl;
+                  } catch (error) {
+                      console.error(`Error generating presigned URL for photo ${photo.name}: ${error}`);
+                      return []; // or handle error differently
+                  }
+              }));
           } catch (error) {
               console.error(`Error fetching photos for artwork ${artwork._id}: ${error}`);
               artwork.downloadLinks = []; // Or set it to null or handle error differently
           }
       });
 
+      // Wait for all promises to resolve before sending the response
       await Promise.all(promises);
 
-      // After processing all artworks, send the response
+      // After processing all artworks and populating downloadLinks, send the response
       res.status(200).json(artworks);
   } catch (error) {
       res.status(500).json({ error: error });
   }
 });
+
 
 
 
