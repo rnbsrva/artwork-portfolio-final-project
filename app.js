@@ -72,9 +72,9 @@ app.post('/register', async (req, res) => {
         const expiresAt = new Date(+now + 120 * 1000)
         const session = new Session(username, expiresAt)
         sessions[sessionToken] = session
-        res.cookie("session_token", sessionToken, { expires: expiresAt });
-        res.json(newUser)
         res.setHeader('x-session-token', sessionToken);
+        res.setHeader('x-session-token-expiration', expiresAt);
+        res.json(newUser)
         res.end();
       } catch (error) {
         console.error(error);
@@ -102,9 +102,9 @@ app.post('/register', async (req, res) => {
       const expiresAt = new Date(+now + 900 * 1000)
       const session = new Session(username, expiresAt)
       sessions[sessionToken] = session
-      res.cookie("session_token", sessionToken, { expires: expiresAt })
-      res.status(200).json({ message: 'Login successful', userId: user._id });
       res.setHeader('x-session-token', sessionToken);
+      res.setHeader('x-session-token-expiration', expiresAt);
+      res.status(200).json({ message: 'Login successful', userId: user._id });
       res.end();
     } catch (error) { 
       res.status(500).json({ error: 'Internal Server Error' });
@@ -112,101 +112,102 @@ app.post('/register', async (req, res) => {
   });
 
 
-  app.post('/logout', async (req, res) => {
-    if (!req.cookies) {
-        res.status(401).end()
-        return
+app.post('/logout', async (req, res) => {
+    if (!req.headers) {
+        res.status(401).end();
+        return;
     }
 
-    const sessionToken = req.cookies['session_token']
+    const sessionToken = req.headers['x-session-token'];
     if (!sessionToken) {
-        res.status(401).end()
-        return
+        res.status(401).end();
+        return;
     }
 
-    delete sessions[sessionToken]
+    delete sessions[sessionToken];
 
-    res.cookie("session_token", "", { expires: new Date() })
-    res.end()
-  });
+    // No need to clear cookies in the response
+    res.end();
+});
 
-  app.post('/refresh', async (req, res) => {
-    
-    if (!req.cookies) {
-        res.status(401).end()
-        return
-    }
+app.post('/refresh', async (req, res) => {
+  if (!req.headers) {
+      res.status(401).end();
+      return;
+  }
 
-    const sessionToken = req.cookies['session_token']
-    if (!sessionToken) {
-        res.status(401).end()
-        return
-    }
+  const sessionToken = req.headers['x-session-token'];
+  if (!sessionToken) {
+      res.status(401).end();
+      return;
+  }
 
-    userSession = sessions[sessionToken]
-    if (!userSession) {
-        res.status(401).end()
-        return
-    }
-    if (userSession.isExpired()) {
-        delete sessions[sessionToken]
-        res.status(401).end()
-        return
-    }
-    const newSessionToken = uuid.v4()
+  const userSession = sessions[sessionToken];
+  if (!userSession) {
+      res.status(401).end();
+      return;
+  }
 
-    const now = new Date()
-    const expiresAt = new Date(+now + 120 * 1000)
-    const session = new Session(userSession.username, expiresAt)
+  if (userSession.isExpired()) {
+      delete sessions[sessionToken];
+      res.status(401).end();
+      return;
+  }
 
-    sessions[newSessionToken] = session
-    delete sessions[sessionToken]
+  const newSessionToken = uuid.v4();
 
-    res.cookie("session_token", newSessionToken, { expires: expiresAt })
-    res.setHeader('x-session-token', sessionToken);
-    res.status(200);
-    res.end()
-  });
+  const now = new Date();
+  const expiresAt = new Date(+now + 120 * 1000);
+  const session = new Session(userSession.username, expiresAt);
+
+  sessions[newSessionToken] = session;
+  delete sessions[sessionToken];
+
+  // Set the new session token in the response header
+  res.setHeader('x-session-token', newSessionToken);
+  res.status(200).end();
+});
+
 
 
   const isAuthenticated = (req) => {
-    if (!req.cookies) {
-      console.log("no cook")
+    if (!req.headers) {
+        console.log("No headers");
         return false;
     }
 
-
-    const sessionToken = req.cookies['session_token'];
+    const sessionToken = req.headers['x-session-token'];
     if (!sessionToken) {
-      console.log("no session_token")
+        console.log("No session token in headers");
         return false;
     }
 
-    userSession = sessions[sessionToken];
+    const userSession = sessions[sessionToken];
     if (!userSession) {
-      console.log("no userSession")
+        console.log("Invalid session token");
         return false;
     }
+
     if (userSession.isExpired()) {
         delete sessions[sessionToken];
+        console.log("Session token expired");
         return false;
     }
 
-    
     return true;
 };
+
 
 
   
 
 app.post('/artworks',  upload.fields([{ name: 'file1' }, { name: 'file2' }, { name: 'file3' }]), async (req, res) => {
   try {
-    if (!isAuthenticated(req, res)) {
+    if (!isAuthenticated(req)) {
       res.status(401).end();
-      console.log(isAuthenticated)
       return;
   }
-  const sessionToken = req.cookies['session_token'];
+  const sessionToken = req.headers['x-session-token'];
   const userSession = sessions[sessionToken];
 
   const user = await User.findOne({ username: userSession.username });
@@ -254,11 +255,6 @@ app.post('/artworks',  upload.fields([{ name: 'file1' }, { name: 'file2' }, { na
           });
       });
     });
-
-
-    
-
-
     res.status(201).json(savedArtwork);
   } catch (error) {
     console.log(error)
@@ -268,81 +264,73 @@ app.post('/artworks',  upload.fields([{ name: 'file1' }, { name: 'file2' }, { na
 
 
 app.get('/artworks', async (req, res) => {
-  if (!req.cookies) {
-      res.status(401).end()
-      return
+  if (!isAuthenticated(req)) {
+      res.status(401).end();
+      return;
   }
 
-  const sessionToken = req.cookies['session_token']
-  if (!sessionToken) {
-      res.status(401).end()
-      return
-  }
-
-  userSession = sessions[sessionToken]
-  if (!userSession) {
-      res.status(401).end()
-      return
-  }
-  if (userSession.isExpired()) {
-      delete sessions[sessionToken]
-      res.status(401).end()
-      return
-  }
+  console.log("authenticated");
 
   try {
       const artworks = await Artwork.find();
 
-      await Promise.all(artworks.map(async (artwork) => {
+      if (artworks.length === 0) { // If there are no artworks, end the request immediately
+          res.status(200).json([]);
+          return;
+      }
+
+      const promises = artworks.map(async (artwork) => {
           try {
               const bucketName = `${artwork._id}`;
               const photosStream = minioClient.listObjects(bucketName);
               const photos = [];
 
               photosStream.on('data', (obj) => {
-                console.log("new photo")
+                  console.log("new photo");
                   photos.push(obj);
               });
 
               photosStream.on('error', (err) => {
                   console.error(`Error fetching photos for artwork ${artwork._id}: ${err}`);
-                  return []
+                  return [];
               });
 
               photosStream.on('end', async () => {
-                console.log("end")
+                  console.log("end");
                   artwork.downloadLinks = await Promise.all(photos.map(async (photo) => {
                       try {
-                          const presignedUrl = await minioClient.presignedGetObject(bucketName, photo.name, 60*60*24);
-                          console.log(presignedUrl)
+                          const presignedUrl = await minioClient.presignedGetObject(bucketName, photo.name, 60 * 60 * 24);
+                          console.log(presignedUrl);
                           return presignedUrl;
                       } catch (error) {
                           console.error(`Error generating presigned URL for photo ${photo.name}: ${error}`);
                           return []; // or handle error differently
                       }
                   }));
-
-                  
-                  res.json(artworks);
               });
           } catch (error) {
               console.error(`Error fetching photos for artwork ${artwork._id}: ${error}`);
               artwork.downloadLinks = []; // Or set it to null or handle error differently
           }
-      }));
+      });
+
+      await Promise.all(promises);
+
+      // After processing all artworks, send the response
+      res.status(200).json(artworks);
   } catch (error) {
       res.status(500).json({ error: error });
   }
 });
 
 
+
 app.get('/artworks/:id', async (req, res) => {
 
-  if (!isAuthenticated(req, res)) {
-    res.status(401).end();
-    return;
+   if (!isAuthenticated(req)) {
+      res.status(401).end();
+      return;
   }
-
   try {
     const artwork = await Artwork.findById(req.params.id);
     if (!artwork) {
@@ -389,12 +377,12 @@ app.get('/artworks/:id', async (req, res) => {
 // Update a task by ID
 app.put('/artworks/:id', async (req, res) => {
 
-    if (!isAuthenticated(req, res)) {
-      res.status(401).end();
-      return;
-  }
+  if (!isAuthenticated(req)) {
+    res.status(401).end();
+    return;
+}
 
-  const sessionToken = req.cookies['session_token'];
+  const sessionToken = req.headers['x-session-token'];
   const userSession = sessions[sessionToken];
 
   const user = await User.findOne({ username: userSession.username });
@@ -436,12 +424,12 @@ app.put('/artworks/:id', async (req, res) => {
 
 // Delete a task by ID
 app.delete('/artworks/:id', async (req, res) => {
-  if (!isAuthenticated(req, res)) {
+  if (!isAuthenticated(req)) {
     res.status(401).end();
     return;
-  }
+}
 
-  const sessionToken = req.cookies['session_token'];
+  const sessionToken = req.headers['x-session-token'];
   const userSession = sessions[sessionToken];
   const user = await User.findOne({ username: userSession.username });
 
@@ -534,12 +522,12 @@ app.delete('/artworks/:id', async (req, res) => {
 app.put('/artworks/updatePhotos/:artworkId', upload.fields([{ name: 'file1' }, { name: 'file2' }, { name: 'file3' }]), async (req, res) => {
 
 
-  if (!isAuthenticated(req, res)) {
+  if (!isAuthenticated(req)) {
     res.status(401).end();
     return;
-  }
+}
 
-  const sessionToken = req.cookies['session_token'];
+  const sessionToken = req.headers['x-session-token'];
   const userSession = sessions[sessionToken];
   const user = await User.findOne({ username: userSession.username });
 
@@ -582,10 +570,10 @@ app.put('/artworks/updatePhotos/:artworkId', upload.fields([{ name: 'file1' }, {
 //not secured endpoint
 app.get('/getHospitalizedCounts', async (req, res) => {
 
-  if (!isAuthenticated(req, res)) {
+  if (!isAuthenticated(req)) {
     res.status(401).end();
     return;
-  }
+}
 
 
   try {
@@ -620,10 +608,10 @@ app.get('/getHospitalizedCounts', async (req, res) => {
 app.get('/population', async (req, res) => {
 
 
-  if (!isAuthenticated(req, res)) {
+  if (!isAuthenticated(req)) {
     res.status(401).end();
     return;
-  }
+}
 
   try {
       const { yearFrom, yearTo } = req.body;
