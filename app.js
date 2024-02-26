@@ -104,7 +104,7 @@ app.post('/register', async (req, res) => {
       sessions[sessionToken] = session
       res.setHeader('x-session-token', sessionToken);
       res.setHeader('x-session-token-expiration', expiresAt);
-      res.status(200).json({sessionToken});
+      res.status(200).json({user,sessionToken })
       res.end();
     } catch (error) { 
       res.status(500).json({ error: 'Internal Server Error' });
@@ -611,7 +611,7 @@ app.get('/getHospitalizedCounts', async (req, res) => {
 
 
 
-app.get('/population', async (req, res) => {
+app.post('/population', async (req, res) => {
 
 
   if (!isAuthenticated(req)) {
