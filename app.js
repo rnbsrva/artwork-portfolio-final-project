@@ -23,7 +23,7 @@ const minioClient = new Minio.Client({
   port: 9000,
   useSSL: false,
   secretKey: process.env.SECRET_KEY,
-  endPoint: "localhost",
+  endPoint: process.env.ENDPOINT,
 });
 
 class Session {
@@ -587,7 +587,7 @@ app.get('/getHospitalizedCounts', async (req, res) => {
       const startDate = moment(date, 'YYYYMMDD'); 
       const hospitalizedCounts = [];
 
-      for (let i = 0; i < 7; i++) {
+      for (let i = 0; i < 10; i++) {
           const currentDate = startDate.clone().subtract(i, 'days');
           const formattedDate = currentDate.format('YYYYMMDD');
           const apiUrl = `https://api.covidtracking.com/v1/us/${formattedDate}.json`;
