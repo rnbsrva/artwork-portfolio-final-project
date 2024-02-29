@@ -26,6 +26,14 @@ const minioClient = new Minio.Client({
   endPoint: process.env.ENDPOINT,
 });
 
+minioClient.listBuckets(function(err, buckets) {
+  if (err) {
+    console.log("Error occurred:", err);
+  } else {
+    console.log("Successfully connected to Minio. Buckets:", buckets);
+  }
+});
+
 class Session {
   constructor(username, expiresAt) {
       this.username = username
